@@ -9,6 +9,7 @@ const api = axios.create({
   timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
+    'Accept': 'application/json',
   },
 });
 
@@ -110,6 +111,7 @@ export const taskService = {
       toast.success('Task deleted successfully!');
       return response.data;
     } catch (error) {
+      toast.error('Failed to delete task.');
       throw error;
     }
   },
@@ -121,6 +123,7 @@ export const taskService = {
       return response.data;
     } catch (error) {
       throw error;
+      toast.error('Failed to delete tasks.');
     }
   },
 
@@ -128,8 +131,10 @@ export const taskService = {
     try {
       const response = await api.get('/tasks/stats');
       return response.data;
+      toast.success('Task stats fetched successfully!');
     } catch (error) {
       throw error;
+      toast.error('Failed to fetch task stats.');
     }
   },
 };
