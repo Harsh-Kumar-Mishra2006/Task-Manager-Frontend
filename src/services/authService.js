@@ -1,21 +1,18 @@
 // services/authService.js
 import api from '../api/api';
 
-const TOKEN_KEY = 'token';
 const USER_KEY = 'user';
 
-// ── Token helpers ──────────────────────────────────────
-const saveSession = (token, user) => {
-  if (token) localStorage.setItem(TOKEN_KEY, token);
+// ── Local cache of the user object (NOT a credential) ──
+// The real session lives in the httpOnly cookie. This cache just lets the
+// UI paint instantly before /profile resolves.
+const saveUser = (user) => {
   if (user) localStorage.setItem(USER_KEY, JSON.stringify(user));
 };
 
 const clearSession = () => {
-  localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
 };
-
-const getToken = () => localStorage.getItem(TOKEN_KEY);
 
 const getCachedUser = () => {
   try {
@@ -26,29 +23,27 @@ const getCachedUser = () => {
   }
 };
 
-// ── Signup ─────────────────────────────────────────────
-const signup = async ({ name, email, password, username, phone, role = 'user', profile } = {}) => {
+// ── Signup (no auto-login) ─────────────────────────────
+const signup = async ({ name, email, password, username, phone, profile } = {}) => {
+  // FIX #3: no `role` sent — backend forces 'user'
   const res = await api.post('/api/auth/signup', {
     name,
     email,
     password,
     username,
     phone,
-    role,
     profile,
   });
-
-  // Backend does NOT return a token on signup — user must log in
-  return res.data;
+  return res.data; // { success, data: { id, ... }, message }
 };
 
 // ── Login ──────────────────────────────────────────────
 const login = async ({ email, password }) => {
   const res = await api.post('/api/auth/login', { email, password });
-
-  const { data: token, user } = res.data;
-  if (token) saveSession(token, user);
-  return { token, user };
+  const user = res.data?.user || null;
+  if (user) saveUser(user);
+  // No token to store — the cookie is set by the server
+  return { user };
 };
 
 // ── Logout ─────────────────────────────────────────────
@@ -65,8 +60,9 @@ const logout = async () => {
 // ── Profile ────────────────────────────────────────────
 const getProfile = async () => {
   const res = await api.get('/api/auth/profile');
+  // FIX #1: backend now returns { success, user }
   const user = res.data?.user || null;
-  if (user) localStorage.setItem(USER_KEY, JSON.stringify(user));
+  if (user) saveUser(user);
   return user;
 };
 
@@ -76,8 +72,10 @@ const debugToken = async () => {
   return res.data;
 };
 
-// ── Auth state helpers ─────────────────────────────────
-const isAuthenticated = () => !!getToken();
+// FIX #6: auth is "does the backend agree we have a session?" — not a token check.
+// We can't see the httpOnly cookie, so the only truthful signal is `user`,
+// which is only set after a successful /login or /profile.
+const isAuthenticated = () => !!getCachedUser();
 
 export {
   signup,
@@ -85,7 +83,6 @@ export {
   logout,
   getProfile,
   debugToken,
-  getToken,
   getCachedUser,
   isAuthenticated,
   clearSession,
@@ -97,7 +94,6 @@ export default {
   logout,
   getProfile,
   debugToken,
-  getToken,
   getCachedUser,
   isAuthenticated,
   clearSession,

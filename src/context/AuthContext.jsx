@@ -8,22 +8,25 @@ export const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => authService.getCachedUser());
-  const [loading, setLoading] = useState(true); // true during initial profile fetch
+  const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState(null); // FIX: surfaced to login page
 
-  // ── Bootstrap: if a token exists, refresh the profile ──
+  // ── Bootstrap: if a cached user exists, validate via /profile ──
   useEffect(() => {
     let cancelled = false;
 
     const bootstrap = async () => {
-      if (!authService.isAuthenticated()) {
-        setLoading(false);
-        return;
-      }
+      // FIX #6: no token check — just try /profile if we have a cached user
+      // OR always try /profile so a cookie-only session can resume after a
+      // hard refresh where localStorage was cleared (private mode, etc).
       try {
         const fresh = await authService.getProfile();
-        if (!cancelled) setUser(fresh);
+        if (!cancelled) {
+          setUser(fresh);
+          setAuthError(null);
+        }
       } catch {
-        // Token invalid / expired — clear it
+        // No session / expired — clear local cache
         authService.clearSession();
         if (!cancelled) setUser(null);
       } finally {
@@ -37,7 +40,7 @@ export function AuthProvider({ children }) {
     };
   }, []);
 
-  // ── Handle session expiry from api.js interceptor ────────
+  // ── Session expiry from api.js interceptor ─────────────
   useEffect(() => {
     const onExpired = () => {
       authService.clearSession();
@@ -49,17 +52,18 @@ export function AuthProvider({ children }) {
     return () => window.removeEventListener('auth:expired', onExpired);
   }, []);
 
-  // ── Actions ──────────────────────────────────────────────
+  // ── Actions ────────────────────────────────────────────
   const login = useCallback(async (credentials) => {
     const { user: loggedInUser } = await authService.login(credentials);
     setUser(loggedInUser);
-    getSocket(); // initialise socket after auth
+    setAuthError(null);
+    getSocket(); // initialise socket after auth (uses cookie)
     return loggedInUser;
   }, []);
 
   const signup = useCallback(async (payload) => {
     const result = await authService.signup(payload);
-    // Signup does NOT log in — user must log in after
+    // Signup does NOT log in — UI must redirect to /login
     return result;
   }, []);
 
@@ -67,6 +71,7 @@ export function AuthProvider({ children }) {
     await authService.logout();
     resetSocket();
     setUser(null);
+    setAuthError(null);
   }, []);
 
   const refreshProfile = useCallback(async () => {
@@ -75,20 +80,21 @@ export function AuthProvider({ children }) {
     return fresh;
   }, []);
 
-  // ── Derived flags ────────────────────────────────────────
-  const isAuthenticated = !!user && authService.isAuthenticated();
+  // FIX #6: single source of truth — the backend-validated user object
+  const isAuthenticated = !!user;
 
   const value = useMemo(
     () => ({
       user,
       loading,
+      authError,
       isAuthenticated,
       login,
       signup,
       logout,
       refreshProfile,
     }),
-    [user, loading, isAuthenticated, login, signup, logout, refreshProfile]
+    [user, loading, authError, isAuthenticated, login, signup, logout, refreshProfile]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -11,16 +11,12 @@ const api = axios.create({
     'Content-Type': 'application/json',
     Accept: 'application/json',
   },
-  withCredentials: true, // cookie fallback (same-site in dev)
+  withCredentials: true, // FIX #4/#9: cookie is the single source of auth
 });
 
-// ── Request: attach JWT ────────────────────────────────
+// ── Request: no token header — httpOnly cookie carries the session ──
 api.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('token');
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
     if (import.meta.env.DEV) {
       console.log(`[API] ${config.method.toUpperCase()} ${config.url}`);
     }
@@ -29,14 +25,22 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-// ── Response: unify errors + throttle toasts ───────────
-let lastToastAt = 0;
+// ── Response: unify errors + per-message toast throttle ──
 const TOAST_THROTTLE_MS = 1500;
+const recentToasts = new Map();
 
+// FIX #10: throttle per message, not globally
 const toastOnce = (message, type = 'error') => {
   const now = Date.now();
-  if (now - lastToastAt < TOAST_THROTTLE_MS) return;
-  lastToastAt = now;
+  const last = recentToasts.get(message) ?? 0;
+  if (now - last < TOAST_THROTTLE_MS) return;
+  recentToasts.set(message, now);
+  // prune occasionally so the map doesn't grow unbounded
+  if (recentToasts.size > 50) {
+    for (const [k, t] of recentToasts) {
+      if (now - t > TOAST_THROTTLE_MS) recentToasts.delete(k);
+    }
+  }
   toast[type](message);
 };
 
@@ -64,15 +68,14 @@ api.interceptors.response.use(
     const status = error.response?.status;
     const data = error.response?.data || {};
 
-    // Auth errors — handle silently, no toast spam
+    // Auth errors
     if (status === 401) {
-      // Only force logout if the error is NOT from the login endpoint
       const url = error.config?.url || '';
-      const isLoginAttempt = url.includes('/auth/login') || url.includes('/auth/signup');
-      if (!isLoginAttempt) {
-        localStorage.removeItem('token');
-        localStorage.removeItem('user');
-        // Don't redirect here — let the page decide (SPA-friendly)
+      const isAuthAttempt =
+        url.includes('/auth/login') || url.includes('/auth/signup');
+      if (!isAuthAttempt) {
+        // FIX #5: clear the cookie server-side too (fire-and-forget)
+        api.post('/api/auth/logout').catch(() => {});
         window.dispatchEvent(new CustomEvent('auth:expired'));
       }
       return Promise.reject(error);
@@ -84,8 +87,7 @@ api.interceptors.response.use(
     }
 
     if (status === 404) {
-      // Quiet — often expected (resource deleted)
-      return Promise.reject(error);
+      return Promise.reject(error); // quiet — often expected
     }
 
     if (status >= 500) {
@@ -93,7 +95,7 @@ api.interceptors.response.use(
       return Promise.reject(error);
     }
 
-    // 400 / 422 — validation errors; message from backend already friendly
+    // 400 / 422
     const msg =
       data.error ||
       data.message ||
